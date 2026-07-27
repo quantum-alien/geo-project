@@ -1,171 +1,217 @@
 # GeoMessages
 
-Backend-сервис для работы с географическими метками и сообщениями.
-Django REST Framework + PostGIS. Позволяет создавать точки на карте,
-привязывать к ним сообщения и искать контент (точки и сообщения) в
-заданном радиусе от пользователя с помощью эффективных пространственных
-запросов PostGIS (`ST_DWithin` через ORM-lookup `distance_lte` на
-`geography`-поле + GiST-индекс).
+A backend service for working with geographic points and messages.
 
-## Стек
+Built with Django REST Framework and PostGIS, it allows users to create map points, attach messages to them, and search for nearby points and messages within a specified radius using efficient PostGIS spatial queries (`ST_DWithin` via the ORM `distance_lte` lookup on a `geography` field with a GiST index).
 
-- Python 3.12, Django 5
+## Tech Stack
+
+- Python 3.12
+- Django 5
 - Django REST Framework + django-filter
 - GeoDjango + djangorestframework-gis
 - PostgreSQL 16 + PostGIS 3.4
-- Docker / docker-compose
+- Docker / Docker Compose
 
-## Модель данных
+## Data Model
 
-- **GeoPoint** — географическая метка: `name`, `description`,
-  `location` (`PointField(geography=True, srid=4326)`, с GiST-индексом),
-  `created_by`, `created_at`, `updated_at`.
-- **Message** — сообщение, привязанное к метке (`FK point`): `text`,
-  `author`, `created_at`.
+- **GeoPoint** — a geographic point containing:
+  - `name`
+  - `description`
+  - `location` (`PointField(geography=True, srid=4326)` with a GiST index)
+  - `created_by`
+  - `created_at`
+  - `updated_at`
 
-## Быстрый старт (Docker)
+- **Message** — a message associated with a point (`ForeignKey` to `GeoPoint`):
+  - `text`
+  - `author`
+  - `created_at`
+
+## Quick Start (Docker)
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-После старта:
+After the containers are running:
 
 ```bash
 docker compose exec web python manage.py createsuperuser
 ```
 
-API будет доступно на `http://localhost:8000/api/`,
-админка — на `http://localhost:8000/admin/`.
+The API will be available at:
 
-## Запуск без Docker
+- `http://localhost:8000/api/`
 
-Нужны системные библиотеки GDAL/GEOS/PROJ и запущенный PostgreSQL с
-расширением PostGIS.
+The Django admin interface will be available at:
+
+- `http://localhost:8000/admin/`
+
+## Running Without Docker
+
+You'll need the GDAL, GEOS, and PROJ system libraries installed, along with a running PostgreSQL instance with the PostGIS extension enabled.
 
 ```bash
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env  # указать параметры своей БД
+cp .env.example .env  # Configure your database credentials
 python manage.py migrate
 python manage.py createsuperuser
 python manage.py runserver
 ```
 
-В самой базе один раз выполнить (миграция Django это не делает
-автоматически, если PostGIS расширение ещё не установлено в БД):
+If the PostGIS extension has not yet been installed in your database, execute the following SQL command once:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS postgis;
 ```
 
-## Аутентификация
+> **Note:** Django migrations do not automatically install the PostGIS extension.
 
-Используется `TokenAuthentication` + `SessionAuthentication`. Чтение
-(`GET`) доступно всем, запись (`POST/PUT/PATCH/DELETE`) — только
-аутентифицированным пользователям (`IsAuthenticatedOrReadOnly`).
+## Authentication
 
-Получить токен:
+The project uses both `TokenAuthentication` and `SessionAuthentication`.
+
+- Read operations (`GET`) are available to everyone.
+- Write operations (`POST`, `PUT`, `PATCH`, `DELETE`) require authentication via `IsAuthenticatedOrReadOnly`.
+
+To obtain an authentication token:
 
 ```bash
 curl -X POST http://localhost:8000/api-auth/login/ ...
-# либо создать токен вручную:
+```
+
+Or create one manually:
+
+```bash
 python manage.py drf_create_token <username>
 ```
 
-Дальше передавать заголовок:
+Include the token in subsequent requests:
 
 ```
-Authorization: Token <ваш_токен>
+Authorization: Token <your_token>
 ```
 
 ## API
 
-### Геометки
+### Geo Points
 
-| Метод | URL                          | Описание                                   |
-|-------|------------------------------|---------------------------------------------|
-| GET   | `/api/points/`               | Список меток (пагинация, `?search=`)        |
-| POST  | `/api/points/`                | Создать метку                              |
-| GET   | `/api/points/{id}/`          | Детали метки + вложенные сообщения         |
-| PUT/PATCH | `/api/points/{id}/`       | Обновить метку                             |
-| DELETE | `/api/points/{id}/`         | Удалить метку                              |
-| GET   | `/api/points/{id}/messages/` | Список сообщений метки                     |
-| POST  | `/api/points/{id}/messages/` | Добавить сообщение к метке                 |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/points/` | List all points (pagination, `?search=` supported) |
+| POST | `/api/points/` | Create a new point |
+| GET | `/api/points/{id}/` | Retrieve point details with nested messages |
+| PUT/PATCH | `/api/points/{id}/` | Update a point |
+| DELETE | `/api/points/{id}/` | Delete a point |
+| GET | `/api/points/{id}/messages/` | List messages for a point |
+| POST | `/api/points/{id}/messages/` | Add a message to a point |
 
-Создание метки:
+### Create a Point
 
 ```bash
 curl -X POST http://localhost:8000/api/points/ \
-  -H "Authorization: Token <token>" -H "Content-Type: application/json" \
-  -d '{"name": "Кремль", "description": "Достопримечательность", "lat": 55.7520, "lon": 37.6175}'
+  -H "Authorization: Token <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "Kremlin",
+        "description": "Tourist attraction",
+        "lat": 55.7520,
+        "lon": 37.6175
+      }'
 ```
 
-Добавление сообщения к метке:
+### Add a Message to a Point
 
 ```bash
 curl -X POST http://localhost:8000/api/points/1/messages/ \
-  -H "Authorization: Token <token>" -H "Content-Type: application/json" \
-  -d '{"text": "Отличное место для фото!"}'
+  -H "Authorization: Token <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "text": "Great place for taking photos!"
+      }'
 ```
 
-### Сообщения (плоский доступ)
+### Messages (Flat Access)
 
-| Метод | URL                              | Описание                                  |
-|-------|-----------------------------------|--------------------------------------------|
-| GET   | `/api/messages/?point={id}`      | Список сообщений, опц. фильтр по метке    |
-| POST  | `/api/messages/`                 | Создать сообщение (обязательно поле `point`)|
-| GET/PUT/DELETE | `/api/messages/{id}/`   | Просмотр/изменение/удаление                |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/messages/?point={id}` | List messages (optionally filtered by point) |
+| POST | `/api/messages/` | Create a message (`point` field is required) |
+| GET/PUT/DELETE | `/api/messages/{id}/` | Retrieve, update, or delete a message |
 
-### Поиск в радиусе от пользователя
+### Search Within a Radius
 
 ```
-GET /api/search/?lat=55.7522&lon=37.6156&radius_m=2000&q=фото&limit=50
+GET /api/search/?lat=55.7522&lon=37.6156&radius_m=2000&q=photo&limit=50
 ```
 
-Параметры:
+#### Query Parameters
 
-- `lat`, `lon` — координаты пользователя (обязательны)
-- `radius_m` — радиус поиска в метрах (по умолчанию 1000, максимум 100000,
-  настраивается через `GEO_SEARCH_DEFAULT_RADIUS_M` /
-  `GEO_SEARCH_MAX_RADIUS_M`)
-- `q` — необязательный текстовый фильтр (по названию/описанию метки и
-  тексту сообщений)
-- `limit` — максимум объектов в каждом списке (по умолчанию 50, максимум 200)
+- `lat`, `lon` — user's coordinates (**required**)
+- `radius_m` — search radius in meters (default: `1000`, maximum: `100000`; configurable via `GEO_SEARCH_DEFAULT_RADIUS_M` and `GEO_SEARCH_MAX_RADIUS_M`)
+- `q` — optional text filter matching point names, descriptions, and message text
+- `limit` — maximum number of results returned in each list (default: `50`, maximum: `200`)
 
-Ответ:
+### Example Response
 
 ```json
 {
-  "query": {"lat": 55.7522, "lon": 37.6156, "radius_m": 2000, "q": null},
+  "query": {
+    "lat": 55.7522,
+    "lon": 37.6156,
+    "radius_m": 2000,
+    "q": null
+  },
   "points": [
-    {"id": 1, "name": "Кремль", "latitude": 55.752, "longitude": 37.6175,
-     "distance_m": 120.96, "messages_count": 1, ...}
+    {
+      "id": 1,
+      "name": "Kremlin",
+      "latitude": 55.752,
+      "longitude": 37.6175,
+      "distance_m": 120.96,
+      "messages_count": 1
+    }
   ],
   "messages": [
-    {"id": 1, "point": 1, "text": "Отличное место для фото!",
-     "distance_m": 120.96, ...}
+    {
+      "id": 1,
+      "point": 1,
+      "text": "Great place for taking photos!",
+      "distance_m": 120.96
+    }
   ]
 }
 ```
 
-Точки и сообщения отсортированы по возрастанию расстояния от заданных
-координат. Поиск выполняется через `ST_DWithin` на geography-поле с
-GiST-индексом, поэтому остаётся быстрым даже на больших объёмах данных.
+Both points and messages are sorted by their distance from the specified coordinates.
 
-## Проверка проекта
+Spatial filtering is performed using PostGIS `ST_DWithin` on a `geography` field backed by a GiST index, ensuring fast query performance even with large datasets.
 
-Код проверен: `python manage.py check`, `makemigrations`/`migrate` и
-сквозной прогон всех эндпоинтов (создание точек, сообщений, вложенные
-и плоские маршруты, поиск по радиусу с текстовым фильтром и валидацией
-границ параметров) — на SQLite+SpatiaLite в качестве временного бэкенда
-для локальной проверки без поднятия PostgreSQL. В `docker-compose.yml`
-используется полноценный `postgis/postgis:16-3.4`.
+## Project Verification
 
-## Возможные доработки
+The project has been verified using:
 
-- Пагинация/кэширование геопоиска для очень больших наборов данных.
-- Полнотекстовый поиск (`SearchVector`) вместо `icontains` для `q`.
-- Права на редактирование/удаление только автору метки/сообщения.
-- Rate limiting на `/api/search/`.
+- `python manage.py check`
+- `makemigrations`
+- `migrate`
+
+All API endpoints have been tested end-to-end, including:
+
+- Creating points
+- Creating messages
+- Nested and flat endpoints
+- Radius-based search
+- Text filtering
+- Query parameter validation
+
+For local testing without PostgreSQL, SQLite with SpatiaLite was used as a temporary spatial backend. The production Docker configuration uses the full `postgis/postgis:16-3.4` image.
+
+## Possible Improvements
+
+- Pagination and caching for large-scale geospatial searches.
+- PostgreSQL full-text search (`SearchVector`) instead of `icontains` for the `q` parameter.
+- Restrict editing and deletion so that only the author of a point or message can modify it.
+- Rate limiting for the `/api/search/` endpoint.
